@@ -3,37 +3,57 @@ import pandas as pd
 from garminconnect import Garmin
 import datetime
 
-st.set_page_config(page_title="Live Garmin Trends", layout="wide")
-st.title("Automated Performance Dashboard")
+st.set_page_config(layout="wide")
+st.title("Performance Dashboard")
 
-# 1. Credentials from Streamlit Secrets
 email = st.secrets["GARMIN_EMAIL"]
 password = st.secrets["GARMIN_PASSWORD"]
 
 try:
-    with st.spinner("Compiling live telemetry..."):
-        api = Garmin(email, password)
-        api.login()
-        
-        today = datetime.date.today()
-        start_date = today - datetime.timedelta(days=30)
-        
-        # FIX: Use get_stats for a range, or fetch daily if needed
-        # get_stats retrieves comprehensive daily summaries for the specified date
-        health_data = api.get_stats(today.isoformat())
-        
-        # Fetch Activity Data
-        activities = api.get_activities_by_date(start_date.isoformat(), today.isoformat())
-        df_activity = pd.DataFrame(activities)
-        df_activity['Date'] = pd.to_datetime(df_activity['startTimeLocal'].str.split(' ').str[0])
-        df_activity['Calories'] = df_activity['calories']
-        df_activity_daily = df_activity.groupby('Date').agg({'Calories': 'sum'}).reset_index()
-        
-        # Display Activity Summary
-        st.subheader("Recent Activity Load")
-        st.line_chart(df_activity_daily.set_index('Date')['Calories'])
-
-        st.info("Data successfully fetched. Direct RHR trend integration is undergoing API maintenance.")
+    api = Garmin(email, password)
+    api.login()
+    today = datetime.date.today()
+    
+    # 1. Fetch Daily Summaries for the last 30 days
+    # This returns a list of dictionaries with all metrics
+    stats = api.get_stats(today.isoformat())
+    
+    # Let's create a DataFrame from the stats
+    # Note: Adjust these keys if your Garmin version returns different nested structures
+    df = pd.DataFrame([api.get_stats( (today - datetime.timedelta(days=i)).isoformat() ) 
+                       for i in range(30)])
+    
+    # Clean up: Select key metrics
+    # You can see available columns by uncommenting: st.write(df.columns)
+    metrics_map = {
+        'restingHeartRate': 'Resting Heart Rate',
+        'averageStressLevel': 'Avg Stress',
+        'sleepScore': 'Sleep Score',
+        'activeKilocalories': 'Active Calories'
+    }
+    
+    # Filter for columns that exist in the returned data
+    available_metrics = {k: v for k, v in metrics_map.items() if k in df.columns}
+    
+    # 2. Interactive Selector
+    selection = st.selectbox("Select Metric to Analyze:", list(available_metrics.values()))
+    metric_key = [k for k, v in available_metrics.items() if v == selection][0]
+    
+    # 3. Process & Trend
+    df[metric_key] = pd.to_numeric(df[metric_key], errors='coerce')
+    st.line_chart(df[metric_key])
+    
+    # 4. Math-based Advice
+    latest = df[metric_key].iloc[0]
+    mean = df[metric_key].mean()
+    std = df[metric_key].std()
+    z = (latest - mean) / std if std > 0 else 0
+    
+    st.subheader(f"Status: {selection}")
+    if abs(z) > 1.5:
+        st.error(f"Alert: {selection} is deviating significantly (Z={z:.2f}). Adjust intensity.")
+    else:
+        st.success(f"Status: Baseline stable (Z={z:.2f}).")
 
 except Exception as e:
-    st.error(f"API Update Required: {e}. The Garmin library method signatures have shifted; ensure you are using the latest `cyberjunky/python-garminconnect` version.")
+    st.error(f"Data Fetch Error: {e}")
