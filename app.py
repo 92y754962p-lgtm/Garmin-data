@@ -3,75 +3,70 @@ import pandas as pd
 from garminconnect import Garmin
 import datetime
 
-st.set_page_config(page_title="Garmin Dashboard", layout="wide")
-st.title("Garmin Master Dashboard")
+st.set_page_config(page_title="Garmin Auto-Monitor", layout="centered")
+st.title("Performance Monitor")
 
-# 1. Credentials
 email = st.secrets["GARMIN_EMAIL"]
 password = st.secrets["GARMIN_PASSWORD"]
 
-# 2. Data Fetching
 @st.cache_data(ttl=3600)
 def get_data():
     api = Garmin(email, password)
     api.login()
     today = datetime.date.today()
     stats_list = []
-    
-    # Iterate through days
-    for i in range(14):
+    for i in range(30):
         day = today - datetime.timedelta(days=i)
         try:
             data = api.get_stats(day.isoformat())
             if data:
                 data['Date'] = day
                 stats_list.append(data)
-        except Exception:
-            continue
-            
+        except Exception: continue
     return pd.DataFrame(stats_list)
 
 try:
-    with st.spinner("Connecting to Garmin..."):
+    with st.spinner("Analyzing health trends..."):
         df = get_data()
         
     if df is not None and not df.empty:
-        # Numeric cleanup
+        # 1. Clean numeric data
+        df = df.set_index('Date')
         for col in df.columns:
-            if col != 'Date':
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+            df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        # Metric Selection
-        st.subheader("Visual Analysis")
-        cols = [c for c in df.columns if c != 'Date']
+        # 2. Automated Trend Detection
+        # We define 'trending poorly' as > 1.5 standard deviations from mean
+        latest = df.iloc[0]
+        means = df.mean()
+        stds = df.std()
         
-        # Dynamically determine valid defaults to prevent "default value" errors
-        valid_defaults = [c for c in ['restingHeartRate', 'sleepScore', 'averageStressLevel'] if c in cols]
-        
-        selected = st.multiselect("Select metrics:", cols, default=valid_defaults)
-        
-        if selected:
-            st.line_chart(df.set_index('Date')[selected])
-            
-            # Readiness Index
-            latest = df.iloc[0]
-            avg = df.mean(numeric_only=True)
-            
-            score_parts = []
-            for s in selected:
-                if pd.notna(latest[s]) and pd.notna(avg[s]) and avg[s] != 0:
-                    if s in ['restingHeartRate', 'averageStressLevel']:
-                        score_parts.append((1 - (latest[s] / avg[s])) * 100)
-                    else:
-                        score_parts.append((latest[s] / avg[s]) * 100)
-            
-            if score_parts:
-                final_index = sum(score_parts) / len(score_parts)
-                st.metric("Readiness Index", f"{int(final_index + 100)}/100")
-            else:
-                st.info("Select a metric to calculate your Readiness Index.")
+        alerts = []
+        for col in df.columns:
+            if stds[col] > 0:
+                z = (latest[col] - means[col]) / stds[col]
+                # Logic: Invert for RHR/Stress (where high = bad)
+                if col in ['restingHeartRate', 'averageStressLevel']:
+                    if z > 1.5: alerts.append(f"⚠️ **{col}**: Significantly elevated.")
+                # Logic: Standard for Sleep/Activity (where low = bad)
+                else:
+                    if z < -1.5: alerts.append(f"⚠️ **{col}**: Significantly low.")
+
+        # 3. Render Summaries
+        st.subheader("System Status")
+        if not alerts:
+            st.success("✅ All systems stable. No abnormal trends detected.")
+        else:
+            st.warning("Action Required:")
+            for alert in alerts:
+                st.markdown(alert)
+                
+        st.subheader("General Readiness")
+        # Simplified Readiness Index display
+        st.metric("Aggregate Health Index", f"{int(100 - (df.iloc[0].mean() / df.mean().mean() * 10))}/100")
+
     else:
-        st.error("No data found. This often happens if 2FA is enabled or the account has restricted API access.")
+        st.error("No data found. Ensure 2FA is disabled.")
 
 except Exception as e:
-    st.error(f"Application Error: {e}")
+    st.error(f"Analysis Error: {str(e)}")
