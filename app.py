@@ -5,13 +5,12 @@ import datetime
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Performance Monitor", layout="centered")
-st.title("Performance Monitor")
+st.title("Performance Monitor (Sensitivity: 2%)")
 
 # --- AUTHENTICATION ---
 email = st.secrets["GARMIN_EMAIL"]
 password = st.secrets["GARMIN_PASSWORD"]
 
-# Define metric "health" direction: True = Higher is better, False = Lower is better
 METRIC_DIRECTION = {
     'restingHeartRate': False, 
     'averageStressLevel': False, 
@@ -26,7 +25,6 @@ def get_data():
     api.login()
     today = datetime.date.today()
     stats_list = []
-    # Pull 30 days to build a robust baseline
     for i in range(30):
         day = today - datetime.timedelta(days=i)
         try:
@@ -52,15 +50,14 @@ try:
         
         key_metrics = ['restingHeartRate', 'sleepScore', 'averageStressLevel', 'bodyBattery']
         
-        # STRICT EXCEPTION-ONLY LOGIC
         comparison_data = []
         for col in key_metrics:
             if col in df.columns and pd.notna(last_7[col]) and pd.notna(last_30[col]) and last_30[col] != 0:
                 shift = (last_7[col] - last_30[col]) / last_30[col]
                 is_better = METRIC_DIRECTION.get(col, True)
                 
-                # Only append if drift > 7.5% in the "bad" direction
-                if (is_better and shift < -0.075) or (not is_better and shift > 0.075):
+                # TEST TRIGGER: Only requires a 2% drift to appear
+                if (is_better and shift < -0.02) or (not is_better and shift > 0.02):
                     comparison_data.append({
                         "Metric": col, 
                         "7-Day": f"{last_7[col]:.1f}", 
@@ -68,12 +65,11 @@ try:
                         "Status": "🔴"
                     })
         
-        # DISPLAY RESULTS
         if comparison_data:
-            st.subheader("⚠️ Attention Required")
+            st.subheader("⚠️ Attention Required (2% Threshold)")
             st.table(pd.DataFrame(comparison_data).set_index("Metric"))
         else:
-            st.success("✅ All metrics are stable. No attention required.")
+            st.success("✅ All metrics are stable within 2%.")
                 
         st.divider()
         st.subheader("General Readiness")
@@ -82,7 +78,7 @@ try:
         st.metric("Aggregate Health Index", f"{readiness}/100")
         
     else:
-        st.error("No data found. Ensure no 2FA on account.")
+        st.error("No data found.")
 
 except Exception as e:
     st.error(f"Analysis Error: {str(e)}")
