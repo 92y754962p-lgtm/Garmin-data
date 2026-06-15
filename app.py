@@ -3,7 +3,6 @@ import pandas as pd
 from garminconnect import Garmin
 import datetime
 
-# --- CONFIGURATION ---
 st.set_page_config(page_title="Performance Monitor", layout="wide")
 st.title("Performance Monitor (5% Sensitivity)")
 
@@ -20,19 +19,22 @@ def get_data():
     for i in range(30):
         day = today - datetime.timedelta(days=i)
         try:
-            # Fetch base stats
-            data = api.get_stats(day.isoformat()) or {}
+            # Fetch data with error handling for each day
+            stats = api.get_stats(day.isoformat()) or {}
             
-            # Explicitly fetch Steps and Calories
+            # Safely fetch steps and calories
             steps_data = api.get_steps_data(day.isoformat())
-            daily_summary = api.get_daily_summary(day.isoformat())
+            summary = api.get_daily_summary(day.isoformat())
             
-            data['Date'] = day
-            data['steps'] = steps_data[0]['steps'] if steps_data else 0
-            data['activeCalories'] = daily_summary.get('activeKilocalories', 0)
+            row = stats
+            row['Date'] = day
+            row['steps'] = steps_data[0]['steps'] if steps_data else 0
+            row['activeCalories'] = summary.get('activeKilocalories', 0)
             
-            stats_list.append(data)
-        except Exception: continue
+            stats_list.append(row)
+        except Exception: 
+            continue # Skip failed days
+            
     return pd.DataFrame(stats_list)
 
 if st.button("Clear Cache & Refresh"):
@@ -40,9 +42,7 @@ if st.button("Clear Cache & Refresh"):
     st.rerun()
 
 try:
-    with st.spinner("Analyzing..."):
-        df = get_data()
-        
+    df = get_data()
     if df is not None and not df.empty:
         df = df.set_index('Date').sort_index(ascending=False)
         df = df.apply(pd.to_numeric, errors='coerce').dropna(axis=1, how='all')
@@ -76,13 +76,12 @@ try:
         
         st.divider()
         st.subheader("General Readiness")
-        # Exclude 'steps' from readiness as it is a high-variance activity metric
-        readiness_df = df.drop(columns=['steps'], errors='ignore')
-        readiness = int(100 - (readiness_df.iloc[0].mean() / readiness_df.mean().mean() * 10))
-        st.metric("Aggregate Health Index", f"{readiness}/100")
-        
+        # Ensure readiness calculation doesn't crash on missing columns
+        r_df = df.drop(columns=['steps'], errors='ignore')
+        if not r_df.empty:
+            readiness = int(100 - (r_df.iloc[0].mean() / r_df.mean().mean() * 10))
+            st.metric("Aggregate Health Index", f"{readiness}/100")
     else:
-        st.error("No data found.")
-
+        st.error("No data could be retrieved. Check your Garmin account login.")
 except Exception as e:
     st.error(f"Analysis Error: {e}")
