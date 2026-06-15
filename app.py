@@ -5,7 +5,7 @@ import datetime
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Performance Monitor", layout="centered")
-st.title("Performance Monitor (Sensitivity: 2%)")
+st.title("Performance Monitor (Sensitivity: 0.05%)")
 
 # --- AUTHENTICATION ---
 email = st.secrets["GARMIN_EMAIL"]
@@ -50,14 +50,18 @@ try:
         
         key_metrics = ['restingHeartRate', 'sleepScore', 'averageStressLevel', 'bodyBattery']
         
+        # EXCEPTION-ONLY LOGIC (0.05% Sensitivity)
         comparison_data = []
+        debug_info = [] # For troubleshooting
+        
         for col in key_metrics:
             if col in df.columns and pd.notna(last_7[col]) and pd.notna(last_30[col]) and last_30[col] != 0:
                 shift = (last_7[col] - last_30[col]) / last_30[col]
+                debug_info.append(f"{col}: {shift:.4f}")
                 is_better = METRIC_DIRECTION.get(col, True)
                 
-                # TEST TRIGGER: Only requires a 2% drift to appear
-                if (is_better and shift < -0.02) or (not is_better and shift > 0.02):
+                # Flag if shift > 0.05% in the "bad" direction
+                if (is_better and shift < -0.0005) or (not is_better and shift > 0.0005):
                     comparison_data.append({
                         "Metric": col, 
                         "7-Day": f"{last_7[col]:.1f}", 
@@ -66,16 +70,21 @@ try:
                     })
         
         if comparison_data:
-            st.subheader("⚠️ Attention Required (2% Threshold)")
+            st.subheader("⚠️ Attention Required")
             st.table(pd.DataFrame(comparison_data).set_index("Metric"))
         else:
-            st.success("✅ All metrics are stable within 2%.")
+            st.success("✅ All metrics are stable. No attention required.")
                 
         st.divider()
         st.subheader("General Readiness")
         numeric_df = df.select_dtypes(include=['number'])
         readiness = int(100 - (numeric_df.iloc[0].mean() / numeric_df.mean().mean() * 10))
         st.metric("Aggregate Health Index", f"{readiness}/100")
+        
+        # DEBUG SECTION
+        with st.expander("Debug: Current Shifts"):
+            for info in debug_info:
+                st.text(info)
         
     else:
         st.error("No data found.")
