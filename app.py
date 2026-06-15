@@ -3,78 +3,66 @@ import pandas as pd
 from garminconnect import Garmin
 import datetime
 
-# --- CONFIGURATION ---
-st.set_page_config(page_title="Performance Monitor", layout="centered")
-st.title("Performance Monitor (0.05% Sensitivity)")
+st.set_page_config(page_title="Performance Monitor", layout="wide")
+st.title("Performance Monitor (Custom Health View)")
 
-# --- AUTHENTICATION ---
-email = st.secrets["GARMIN_EMAIL"]
-password = st.secrets["GARMIN_PASSWORD"]
+# Mapping: Display Name -> API Key
+METRIC_MAP = {
+    'Resting Heart Rate': 'restingHeartRate',
+    'Average Steps': 'steps',
+    'Sleep Score': 'sleepScore',
+    'Respiration': 'latestRespirationValue',
+    'Stress': 'averageStressLevel',
+    'Body Battery': 'bodyBatteryMostRecentValue',
+    'HRV': 'hrvValue',
+    'VO2 Max': 'vo2MaxValue',
+    'Total Calories': 'activeCalories'
+}
 
-# --- DATA PIPELINE ---
 @st.cache_data(ttl=3600)
 def get_data():
-    api = Garmin(email, password)
+    api = Garmin(st.secrets["GARMIN_EMAIL"], st.secrets["GARMIN_PASSWORD"])
     api.login()
     today = datetime.date.today()
     stats_list = []
-    # Pull 30 days
     for i in range(30):
         day = today - datetime.timedelta(days=i)
         try:
-            data = api.get_stats(day.isoformat())
-            if data:
-                data['Date'] = day
-                stats_list.append(data)
+            row = api.get_stats(day.isoformat()) or {}
+            steps = api.get_steps_data(day.isoformat())
+            summary = api.get_daily_summary(day.isoformat())
+            row['Date'] = day
+            row['steps'] = steps[0]['steps'] if steps else 0
+            row['activeCalories'] = summary.get('activeKilocalories', 0)
+            stats_list.append(row)
         except Exception: continue
     return pd.DataFrame(stats_list)
 
-# --- CACHE CONTROL ---
-if st.button("Clear Cache & Refresh Data"):
-    st.cache_data.clear()
-    st.rerun()
-
-# --- MAIN DASHBOARD ---
 try:
-    with st.spinner("Analyzing..."):
-        df = get_data()
-        
-    if df is not None and not df.empty:
-        df = df.set_index('Date').sort_index(ascending=False)
-        df = df.apply(pd.to_numeric, errors='coerce')
-        
-        # Calculate distinct non-overlapping periods
-        last_7 = df.iloc[:7].mean()
-        prev_23 = df.iloc[7:30].mean()
-        
-        comparison_data = []
-        for col in df.columns:
-            if pd.notna(last_7[col]) and pd.notna(prev_23[col]) and prev_23[col] != 0:
-                shift = (last_7[col] - prev_23[col]) / prev_23[col]
-                
-                # SHOW ANY SHIFT > 10.0% (0.1) regardless of direction
-                if abs(shift) > 0.10: 
-                    comparison_data.append({
-                        "Metric": col, 
-                        "7-Day": f"{last_7[col]:.2f}", 
-                        "Prev 23": f"{prev_23[col]:.2f}", 
-                        "Shift": f"{shift:.2%}"
-                    })
-        
-        if comparison_data:
-            st.subheader("Detected Shifts (>0.05%)")
-            st.table(pd.DataFrame(comparison_data).set_index("Metric"))
-        else:
-            st.success("✅ No metrics have shifted by more than 0.05% in the last week.")
-                
-        st.divider()
-        st.subheader("General Readiness")
-        numeric_df = df.select_dtypes(include=['number'])
-        readiness = int(100 - (numeric_df.iloc[0].mean() / numeric_df.mean().mean() * 10))
-        st.metric("Aggregate Health Index", f"{readiness}/100")
-        
+    df = get_data().set_index('Date').sort_index(ascending=False)
+    df = df.apply(pd.to_numeric, errors='coerce')
+    
+    last_7 = df.iloc[:7].mean()
+    prev_23 = df.iloc[7:30].mean()
+    
+    active_shifts = []
+    
+    for display_name, api_key in METRIC_MAP.items():
+        if api_key in df.columns and pd.notna(last_7[api_key]) and prev_23[api_key] != 0:
+            shift = (last_7[api_key] - prev_23[api_key]) / prev_23[api_key]
+            if abs(shift) > 0.10: # 10% Sensitivity
+                active_shifts.append({
+                    "Metric": display_name, 
+                    "7-Day": f"{last_7[api_key]:.1f}", 
+                    "Prev 23": f"{prev_23[api_key]:.1f}", 
+                    "Shift": f"{shift:.2%}"
+                })
+    
+    if active_shifts:
+        st.subheader("⚠️ Detected Shifts (>10%)")
+        st.table(pd.DataFrame(active_shifts).set_index("Metric"))
     else:
-        st.error("No data found. Ensure no 2FA on account.")
+        st.success("✅ No selected metrics have shifted by more than 10%.")
 
 except Exception as e:
-    st.error(f"Analysis Error: {e}")
+    st.error(f"Error: {e}")
