@@ -3,12 +3,14 @@ import pandas as pd
 from garminconnect import Garmin
 import datetime
 
+# --- CONFIGURATION ---
 st.set_page_config(page_title="Performance Monitor", layout="wide")
 st.title("Performance Monitor (10% Sensitivity)")
 
 email = st.secrets["GARMIN_EMAIL"]
 password = st.secrets["GARMIN_PASSWORD"]
 
+# --- DATA PIPELINE ---
 @st.cache_data(ttl=3600)
 def get_data():
     api = Garmin(email, password)
@@ -20,25 +22,25 @@ def get_data():
         day = today - datetime.timedelta(days=i)
         try:
             # Fetch base stats
-            stats = api.get_stats(day.isoformat()) or {}
-            # Fetch explicit metrics to avoid mapping issues
-            steps = api.get_steps_data(day.isoformat())
-            summary = api.get_daily_summary(day.isoformat())
+            data = api.get_stats(day.isoformat()) or {}
             
-            row = stats
-            row['Date'] = day
-            row['steps'] = steps[0]['steps'] if steps else 0
-            row['activeCalories'] = summary.get('activeKilocalories', 0)
+            # Explicitly fetch Steps and Calories
+            steps_data = api.get_steps_data(day.isoformat())
+            daily_summary = api.get_daily_summary(day.isoformat())
             
-            stats_list.append(row)
-        except Exception: 
-            continue
+            data['Date'] = day
+            data['steps'] = steps_data[0]['steps'] if steps_data else 0
+            data['activeCalories'] = daily_summary.get('activeKilocalories', 0)
+            
+            stats_list.append(data)
+        except Exception: continue
     return pd.DataFrame(stats_list)
 
 if st.button("Clear Cache & Refresh"):
     st.cache_data.clear()
     st.rerun()
 
+# --- MAIN DASHBOARD ---
 try:
     with st.spinner("Analyzing..."):
         df = get_data()
@@ -76,12 +78,12 @@ try:
         
         st.divider()
         st.subheader("General Readiness")
-        r_df = df.drop(columns=['steps'], errors='ignore')
-        if not r_df.empty:
-            readiness = int(100 - (r_df.iloc[0].mean() / r_df.mean().mean() * 10))
-            st.metric("Aggregate Health Index", f"{readiness}/100")
-            
+        readiness_df = df.drop(columns=['steps'], errors='ignore')
+        readiness = int(100 - (readiness_df.iloc[0].mean() / readiness_df.mean().mean() * 10))
+        st.metric("Aggregate Health Index", f"{readiness}/100")
+        
     else:
         st.error("No data found.")
+
 except Exception as e:
     st.error(f"Analysis Error: {e}")
