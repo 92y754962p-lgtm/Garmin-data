@@ -1,42 +1,29 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 
-st.set_page_config(page_title="Garmin Trends", layout="wide")
+st.set_page_config(page_title="Dual-File Garmin Trends", layout="wide")
 st.title("Holistic Health & Performance Trends")
 
-# 1. UI File Ingestion
-uploaded_file = st.file_uploader("Upload your Garmin CSV", type=["csv"])
+col1, col2 = st.columns(2)
+with col1:
+    health_file = st.file_uploader("1. Upload Health CSV (e.g., RHR)", type=["csv"])
+with col2:
+    activity_file = st.file_uploader("2. Upload Activities CSV", type=["csv"])
 
-if uploaded_file is not None:
+if health_file and activity_file:
     try:
-        # Pandas reads the uploaded file object directly from memory
-        df = pd.read_csv(uploaded_file)
+        # Load data
+        df_health = pd.read_csv(health_file)
+        df_activity = pd.read_csv(activity_file)
         
-        # 2. Data Normalization
-        # Note: Update 'date' and 'rhr' to match your exact Garmin column headers
-        df['date'] = pd.to_datetime(df['date'])
-        df = df.sort_values('date')
+        # Standardize dates (Update 'Date' strings if Garmin headers differ)
+        df_health['Date'] = pd.to_datetime(df_health.iloc[:, 0])
+        df_activity['Date'] = pd.to_datetime(df_activity['Date'].str.split(' ').str[0])
         
-        # 3. Trend Rendering
-        df['7_day_rhr'] = df['rhr'].rolling(window=7, min_periods=1).mean()
+        # Aggregate daily activity metrics (e.g., total calories burned per day)
+        df_activity_daily = df_activity.groupby('Date').agg({'Calories': 'sum'}).reset_index()
         
-        st.subheader("Resting Heart Rate (RHR) Trend")
-        st.line_chart(df.set_index('date')[['rhr', '7_day_rhr']])
-        
-        # 4. Algorithmic Advice Engine
-        st.subheader("Actionable Directives")
-        latest_rhr = df['rhr'].iloc[-1]
-        mean_rhr = df['rhr'].mean()
-        std_rhr = df['rhr'].std()
-        
-        if latest_rhr > (mean_rhr + std_rhr):
-            st.error(f"High Fatigue: RHR is elevated ({latest_rhr:.1f} bpm). Reduce bench press and standing row volume today to allow central nervous system recovery.")
-        elif latest_rhr < (mean_rhr - std_rhr):
-            st.success(f"Prime Readiness: RHR is suppressed ({latest_rhr:.1f} bpm). Excellent physiological state to maximize intensity during Saturday tennis.")
-        else:
-            st.info(f"Baseline Normal: RHR ({latest_rhr:.1f} bpm) is stable. You are adapting predictably to the 700-calorie deficit. Proceed with standard scheduled load.")
-
-    except KeyError as e:
-        st.error(f"Error: Could not find column {e}. Please verify your CSV headers match the script.")
-else:
-    st.info("Awaiting CSV upload...")
+        # Inner join on the exact date
+        df_merged = pd.merge(df_health, df_activity_daily, on='Date', how='inner')
+        df_merged['
