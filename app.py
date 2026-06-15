@@ -3,78 +3,74 @@ import pandas as pd
 from garminconnect import Garmin
 import datetime
 
-# --- CONFIGURATION ---
 st.set_page_config(page_title="Garmin Master Dashboard", layout="wide")
 st.title("Garmin Master Dashboard")
 
-# --- AUTHENTICATION ---
-# Ensure GARMIN_EMAIL and GARMIN_PASSWORD are set in Streamlit Cloud Secrets
-if "GARMIN_EMAIL" not in st.secrets or "GARMIN_PASSWORD" not in st.secrets:
-    st.error("Secrets not found! Please add GARMIN_EMAIL and GARMIN_PASSWORD to your Streamlit Cloud Secrets.")
-    st.stop()
-
+# 1. Credentials from Secrets
 email = st.secrets["GARMIN_EMAIL"]
 password = st.secrets["GARMIN_PASSWORD"]
 
-# --- DATA PIPELINE ---
+# 2. Forceful Data Fetching
 @st.cache_data(ttl=3600)
-def fetch_garmin_data():
+def get_data():
     api = Garmin(email, password)
-    api.login()
+    # The 'login' method is the most fragile part. 
+    # We call it explicitly to capture initialization errors.
+    if not api.login():
+        return None
+    
     today = datetime.date.today()
     # Fetch 30 days of data
-    data_list = [api.get_stats((today - datetime.timedelta(days=i)).isoformat()) 
-                 for i in range(30)]
-    return pd.DataFrame(data_list)
+    stats_list = []
+    for i in range(30):
+        day = today - datetime.timedelta(days=i)
+        try:
+            # We fetch user metrics using the most stable endpoint
+            stats = api.get_stats(day.isoformat())
+            if stats:
+                stats['Date'] = day
+                stats_list.append(stats)
+        except:
+            continue
+            
+    return pd.DataFrame(stats_list)
 
-# --- MAIN APP ---
 try:
-    with st.spinner("Aggregating your health data..."):
-        df = fetch_garmin_data()
+    with st.spinner("Authenticating..."):
+        df = get_data()
         
-        # Clean Data: Drop columns with no data and convert types
+    if df is not None and not df.empty:
+        # Clean Data
         df = df.dropna(axis=1, how='all')
         for col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='ignore')
-            
-        # --- UI: METRIC SELECTION ---
+            if col != 'Date':
+                df[col] = pd.to_numeric(df[col], errors='ignore')
+        
+        # UI: Metric Selection
         st.subheader("Select Metrics for Trend Analysis")
-        available_cols = df.columns.tolist()
-        # Set intuitive defaults
-        default_cols = [c for c in ['restingHeartRate', 'sleepScore', 'averageStressLevel'] if c in available_cols]
+        cols = [c for c in df.columns if c != 'Date']
+        selected = st.multiselect("Visuals:", cols, default=['restingHeartRate', 'sleepScore'] if 'restingHeartRate' in cols else cols[:2])
         
-        selected_metrics = st.multiselect("Choose data points to visualize:", available_cols, default=default_cols)
-        
-        if selected_metrics:
-            # Render chart
-            st.line_chart(df[selected_metrics])
+        if selected:
+            st.line_chart(df.set_index('Date')[selected])
             
-            # --- READINESS INDEX ---
+            # Readiness Index
             st.subheader("Readiness Index (0-100)")
+            latest = df.iloc[0]
+            avg = df.mean(numeric_only=True)
             
-            # Logic: Normalize scores (100 is baseline)
-            current_readiness = []
-            for m in selected_metrics:
-                # Invert metrics where lower is better
-                if m in ['restingHeartRate', 'averageStressLevel']:
-                    score = (1 - (df[m].iloc[0] / df[m].mean())) * 100
+            # Simple scoring logic
+            scores = []
+            for s in selected:
+                if s in ['restingHeartRate', 'averageStressLevel']:
+                    scores.append((1 - (latest[s] / avg[s])) * 100)
                 else:
-                    score = (df[m].iloc[0] / df[m].mean()) * 100
-                current_readiness.append(score)
+                    scores.append((latest[s] / avg[s]) * 100)
             
-            final_index = sum(current_readiness) / len(current_readiness)
-            
+            final_index = sum(scores) / len(scores)
             st.metric("Readiness Index", f"{int(final_index + 100)}/100")
-            
-            # Advice
-            if final_index > 5:
-                st.success("Performance Trend: Positive. You are exceeding your 30-day baseline.")
-            elif final_index < -5:
-                st.warning("Performance Trend: Declining. Prioritize recovery.")
-            else:
-                st.info("Performance Trend: Stable. You are perfectly adapted to current load.")
-        else:
-            st.info("Select metrics above to view your Readiness Index.")
+    else:
+        st.error("Authentication succeeded, but no data returned. Garmin may be rate-limiting your connection.")
 
 except Exception as e:
-    st.error(f"Data Fetch Failed: {e}. If this persists, verify your password has no special character encoding issues.")
+    st.error(f"Critical Failure: {str(e)}")
