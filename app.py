@@ -16,13 +16,22 @@ def get_data():
     api.login()
     today = datetime.date.today()
     stats_list = []
+    
     for i in range(30):
         day = today - datetime.timedelta(days=i)
         try:
-            data = api.get_stats(day.isoformat())
-            if data:
-                data['Date'] = day
-                stats_list.append(data)
+            # Fetch base stats
+            data = api.get_stats(day.isoformat()) or {}
+            
+            # Explicitly fetch Steps and Calories
+            steps_data = api.get_steps_data(day.isoformat())
+            daily_summary = api.get_daily_summary(day.isoformat())
+            
+            data['Date'] = day
+            data['steps'] = steps_data[0]['steps'] if steps_data else 0
+            data['activeCalories'] = daily_summary.get('activeKilocalories', 0)
+            
+            stats_list.append(data)
         except Exception: continue
     return pd.DataFrame(stats_list)
 
@@ -49,7 +58,7 @@ try:
                 shift = (last_7[col] - prev_23[col]) / prev_23[col]
                 data_row = {"Metric": col, "7-Day": f"{last_7[col]:.1f}", "Prev 23": f"{prev_23[col]:.1f}", "Shift": f"{shift:.2%}"}
                 
-                # UPDATED: 5% Threshold logic
+                # Check threshold (5%)
                 if abs(shift) > 0.05:
                     active_shifts.append(data_row)
                 else:
@@ -64,16 +73,16 @@ try:
         with st.expander("View Stable Metrics (<=5% shift)"):
             if stable_metrics:
                 st.table(pd.DataFrame(stable_metrics).set_index("Metric"))
-            else:
-                st.write("No stable metrics found.")
-                
+        
         st.divider()
         st.subheader("General Readiness")
-        readiness = int(100 - (df.iloc[0].mean() / df.mean().mean() * 10))
+        # Exclude 'steps' from readiness as it is a high-variance activity metric
+        readiness_df = df.drop(columns=['steps'], errors='ignore')
+        readiness = int(100 - (readiness_df.iloc[0].mean() / readiness_df.mean().mean() * 10))
         st.metric("Aggregate Health Index", f"{readiness}/100")
         
     else:
         st.error("No data found.")
 
 except Exception as e:
-    st.error(f"Error: {e}")
+    st.error(f"Analysis Error: {e}")
