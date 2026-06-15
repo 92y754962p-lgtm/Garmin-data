@@ -3,8 +3,9 @@ import pandas as pd
 from garminconnect import Garmin
 import datetime
 
+# --- CONFIGURATION ---
 st.set_page_config(page_title="Performance Monitor", layout="wide")
-st.title("Performance Monitor (Dynamic Metric Tracking)")
+st.title("Performance Monitor (5% Sensitivity)")
 
 email = st.secrets["GARMIN_EMAIL"]
 password = st.secrets["GARMIN_PASSWORD"]
@@ -30,16 +31,16 @@ if st.button("Clear Cache & Refresh"):
     st.rerun()
 
 try:
-    df = get_data()
+    with st.spinner("Analyzing..."):
+        df = get_data()
+        
     if df is not None and not df.empty:
         df = df.set_index('Date').sort_index(ascending=False)
-        # Force all columns to numeric; drops non-numeric columns automatically
         df = df.apply(pd.to_numeric, errors='coerce').dropna(axis=1, how='all')
         
         last_7 = df.iloc[:7].mean()
         prev_23 = df.iloc[7:30].mean()
         
-        # Split metrics into "Active" (>-0.05%) and "Stable"
         active_shifts = []
         stable_metrics = []
         
@@ -48,17 +49,19 @@ try:
                 shift = (last_7[col] - prev_23[col]) / prev_23[col]
                 data_row = {"Metric": col, "7-Day": f"{last_7[col]:.1f}", "Prev 23": f"{prev_23[col]:.1f}", "Shift": f"{shift:.2%}"}
                 
-                if abs(shift) > 0.0005:
+                # UPDATED: 5% Threshold logic
+                if abs(shift) > 0.05:
                     active_shifts.append(data_row)
                 else:
                     stable_metrics.append(data_row)
         
-        # Display Tables
         if active_shifts:
-            st.subheader("⚠️ Detected Shifts (>0.05%)")
+            st.subheader("⚠️ Detected Shifts (>5%)")
             st.table(pd.DataFrame(active_shifts).set_index("Metric"))
+        else:
+            st.success("✅ No metrics have shifted by more than 5%.")
             
-        with st.expander("View Stable Metrics (<0.05% shift)"):
+        with st.expander("View Stable Metrics (<=5% shift)"):
             if stable_metrics:
                 st.table(pd.DataFrame(stable_metrics).set_index("Metric"))
             else:
