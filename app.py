@@ -3,11 +3,9 @@ import pandas as pd
 from garminconnect import Garmin
 import datetime
 
-# --- CONFIGURATION ---
 st.set_page_config(page_title="Performance Monitor", layout="centered")
 st.title("Performance Monitor (Sensitivity: 7.5%)")
 
-# --- AUTHENTICATION ---
 email = st.secrets["GARMIN_EMAIL"]
 password = st.secrets["GARMIN_PASSWORD"]
 
@@ -18,7 +16,6 @@ METRIC_DIRECTION = {
     'bodyBattery': True
 }
 
-# --- DATA PIPELINE ---
 @st.cache_data(ttl=3600)
 def get_data():
     api = Garmin(email, password)
@@ -35,7 +32,6 @@ def get_data():
         except Exception: continue
     return pd.DataFrame(stats_list)
 
-# --- MAIN DASHBOARD ---
 try:
     with st.spinner("Analyzing trends..."):
         df = get_data()
@@ -51,18 +47,17 @@ try:
         
         st.subheader("7-Day vs 30-Day Trends")
         
-        # Table with formatted whole percentages/numbers (no overkill decimals)
         comparison_data = []
         for col in key_metrics:
             if col in df.columns:
+                # Forced string formatting to 1 decimal place
                 comparison_data.append({
                     "Metric": col,
-                    "7-Day Avg": round(last_7_days[col], 1),
-                    "30-Day Avg": round(last_30_days[col], 1)
+                    "7-Day Avg": f"{last_7_days[col]:.1f}",
+                    "30-Day Avg": f"{last_30_days[col]:.1f}"
                 })
         st.table(pd.DataFrame(comparison_data).set_index("Metric"))
         
-        # ALERTS
         alerts = []
         for col in key_metrics:
             if col in df.columns and pd.notna(last_7_days[col]) and pd.notna(last_30_days[col]) and last_30_days[col] != 0:
@@ -70,7 +65,6 @@ try:
                 is_higher_better = METRIC_DIRECTION.get(col, True)
                 
                 if (is_higher_better and shift < -0.075) or (not is_higher_better and shift > 0.075):
-                    # Changed {:.1%} to {:.0%} to show whole percentages only
                     alerts.append(f"⚠️ **{col}**: Trending **{shift:.0%}** vs baseline.")
 
         if not alerts:
