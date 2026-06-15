@@ -3,85 +3,78 @@ import pandas as pd
 from garminconnect import Garmin
 import datetime
 
-st.set_page_config(page_title="Performance Monitor", layout="wide")
-st.title("Performance Monitor (5% Sensitivity)")
+# --- CONFIGURATION ---
+st.set_page_config(page_title="Performance Monitor", layout="centered")
+st.title("Performance Monitor (0.05% Sensitivity)")
 
+# --- AUTHENTICATION ---
 email = st.secrets["GARMIN_EMAIL"]
 password = st.secrets["GARMIN_PASSWORD"]
 
+# --- DATA PIPELINE ---
 @st.cache_data(ttl=3600)
 def get_data():
     api = Garmin(email, password)
     api.login()
     today = datetime.date.today()
     stats_list = []
-    
+    # Pull 30 days
     for i in range(30):
         day = today - datetime.timedelta(days=i)
         try:
-            # Fetch data with error handling for each day
-            stats = api.get_stats(day.isoformat()) or {}
-            
-            # Safely fetch steps and calories
-            steps_data = api.get_steps_data(day.isoformat())
-            summary = api.get_daily_summary(day.isoformat())
-            
-            row = stats
-            row['Date'] = day
-            row['steps'] = steps_data[0]['steps'] if steps_data else 0
-            row['activeCalories'] = summary.get('activeKilocalories', 0)
-            
-            stats_list.append(row)
-        except Exception: 
-            continue # Skip failed days
-            
+            data = api.get_stats(day.isoformat())
+            if data:
+                data['Date'] = day
+                stats_list.append(data)
+        except Exception: continue
     return pd.DataFrame(stats_list)
 
-if st.button("Clear Cache & Refresh"):
+# --- CACHE CONTROL ---
+if st.button("Clear Cache & Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
+# --- MAIN DASHBOARD ---
 try:
-    df = get_data()
+    with st.spinner("Analyzing..."):
+        df = get_data()
+        
     if df is not None and not df.empty:
         df = df.set_index('Date').sort_index(ascending=False)
-        df = df.apply(pd.to_numeric, errors='coerce').dropna(axis=1, how='all')
+        df = df.apply(pd.to_numeric, errors='coerce')
         
+        # Calculate distinct non-overlapping periods
         last_7 = df.iloc[:7].mean()
         prev_23 = df.iloc[7:30].mean()
         
-        active_shifts = []
-        stable_metrics = []
-        
+        comparison_data = []
         for col in df.columns:
             if pd.notna(last_7[col]) and pd.notna(prev_23[col]) and prev_23[col] != 0:
                 shift = (last_7[col] - prev_23[col]) / prev_23[col]
-                data_row = {"Metric": col, "7-Day": f"{last_7[col]:.1f}", "Prev 23": f"{prev_23[col]:.1f}", "Shift": f"{shift:.2%}"}
                 
-                # Check threshold (5%)
-                if abs(shift) > 0.05:
-                    active_shifts.append(data_row)
-                else:
-                    stable_metrics.append(data_row)
+                # SHOW ANY SHIFT > 0.05% (0.0005) regardless of direction
+                if abs(shift) > 0.0005: 
+                    comparison_data.append({
+                        "Metric": col, 
+                        "7-Day": f"{last_7[col]:.2f}", 
+                        "Prev 23": f"{prev_23[col]:.2f}", 
+                        "Shift": f"{shift:.2%}"
+                    })
         
-        if active_shifts:
-            st.subheader("⚠️ Detected Shifts (>5%)")
-            st.table(pd.DataFrame(active_shifts).set_index("Metric"))
+        if comparison_data:
+            st.subheader("Detected Shifts (>0.05%)")
+            st.table(pd.DataFrame(comparison_data).set_index("Metric"))
         else:
-            st.success("✅ No metrics have shifted by more than 5%.")
-            
-        with st.expander("View Stable Metrics (<=5% shift)"):
-            if stable_metrics:
-                st.table(pd.DataFrame(stable_metrics).set_index("Metric"))
-        
+            st.success("✅ No metrics have shifted by more than 0.05% in the last week.")
+                
         st.divider()
         st.subheader("General Readiness")
-        # Ensure readiness calculation doesn't crash on missing columns
-        r_df = df.drop(columns=['steps'], errors='ignore')
-        if not r_df.empty:
-            readiness = int(100 - (r_df.iloc[0].mean() / r_df.mean().mean() * 10))
-            st.metric("Aggregate Health Index", f"{readiness}/100")
+        numeric_df = df.select_dtypes(include=['number'])
+        readiness = int(100 - (numeric_df.iloc[0].mean() / numeric_df.mean().mean() * 10))
+        st.metric("Aggregate Health Index", f"{readiness}/100")
+        
     else:
-        st.error("No data could be retrieved. Check your Garmin account login.")
+        st.error("No data found. Ensure no 2FA on account.")
+
 except Exception as e:
     st.error(f"Analysis Error: {e}")
