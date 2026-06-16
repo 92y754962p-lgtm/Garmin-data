@@ -4,7 +4,7 @@ from garminconnect import Garmin
 import datetime
 
 st.set_page_config(page_title="Performance Monitor", layout="wide")
-st.title("Performance Monitor (10% Sensitivity)")
+st.title("Performance Monitor (Color-Coded Health Shifts)")
 
 # The confirmed, accurate internal API keys mapped to your preferred names
 METRIC_MAP = {
@@ -19,6 +19,27 @@ METRIC_MAP = {
     'Total Calories': 'activeKilocalories'
 }
 
+# Define which metrics are considered "healthy" when they increase
+HIGHER_IS_BETTER = [
+    'Average Steps', 'Sleep Score', 'Body Battery', 
+    'HRV', 'VO2 Max', 'Total Calories'
+]
+
+def apply_health_colors(row):
+    """Pandas Styler function to color the Shift column based on healthy metric direction."""
+    metric = row.name
+    shift_val = float(row['Shift'].strip('%'))
+    
+    if shift_val > 0:
+        color = 'lightgreen' if metric in HIGHER_IS_BETTER else 'lightcoral'
+    elif shift_val < 0:
+        color = 'lightcoral' if metric in HIGHER_IS_BETTER else 'lightgreen'
+    else:
+        color = 'inherit'
+        
+    # Return empty strings for the first two columns to leave them uncolored, color the 3rd column
+    return [''] * 2 + [f'color: {color}; font-weight: bold']
+
 @st.cache_data(ttl=3600)
 def get_data():
     api = Garmin(st.secrets["GARMIN_EMAIL"], st.secrets["GARMIN_PASSWORD"])
@@ -26,7 +47,6 @@ def get_data():
     today = datetime.date.today()
     clean_data = []
     
-    # 30 calls total (1 per day). Fast enough to avoid hanging.
     for i in range(30):
         day = today - datetime.timedelta(days=i)
         try:
@@ -75,15 +95,18 @@ try:
                     else:
                         stable_metrics.append(data_row)
             
+            # Using st.dataframe instead of st.table because it renders Pandas Stylers flawlessly
             if active_shifts:
                 st.subheader("⚠️ Detected Shifts (>10%)")
-                st.table(pd.DataFrame(active_shifts).set_index("Metric"))
+                active_df = pd.DataFrame(active_shifts).set_index("Metric")
+                st.dataframe(active_df.style.apply(apply_health_colors, axis=1), use_container_width=True)
             else:
                 st.success("✅ All primary metrics stable within 10%.")
                 
             with st.expander("View Stable Metrics (<=10% shift)"):
                 if stable_metrics:
-                    st.table(pd.DataFrame(stable_metrics).set_index("Metric"))
+                    stable_df = pd.DataFrame(stable_metrics).set_index("Metric")
+                    st.dataframe(stable_df.style.apply(apply_health_colors, axis=1), use_container_width=True)
         else:
             st.error("No data retrieved. Please check Garmin login/servers.")
             
